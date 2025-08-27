@@ -16,7 +16,8 @@ use crate::{
         ProgressNotification, ProgressNotificationParam, PromptListChangedNotification,
         ProtocolVersion, ResourceListChangedNotification, ResourceUpdatedNotification,
         ResourceUpdatedNotificationParam, ServerInfo, ServerNotification, ServerRequest,
-        ServerResult, ToolListChangedNotification,
+        ServerResult, ToolListChangedNotification, Meta, Extensions, JsonRpcRequest,
+        ServerJsonRpcMessage,
     },
     transport::DynamicTransportError,
 };
@@ -187,20 +188,46 @@ where
     let mut transport = transport.into_transport();
     let id_provider = <Arc<AtomicU32RequestIdProvider>>::default();
 
-    // Get initialize request
-    let (request, id) = expect_request(&mut transport, "initialized request").await?;
-
-    let ClientRequest::InitializeRequest(peer_info) = &request else {
-        return Err(ServerInitializeError::ExpectedInitializeRequest(Some(
-            ClientJsonRpcMessage::request(request, id),
-        )));
+    // Get initialize request (be permissive: respond with error for non-initialize requests, do not drop transport)
+    let (request, id, meta, extensions, peer_info) = loop {
+        let msg = expect_next_message(&mut transport, "initialized request").await?;
+        match msg {
+            ClientJsonRpcMessage::Request(JsonRpcRequest { id, mut request, .. }) => {
+                // Extract meta and extensions without extra clones
+                let mut m = Meta::new();
+                let mut ext = Extensions::new();
+                std::mem::swap(&mut m, request.get_meta_mut());
+                std::mem::swap(&mut ext, request.extensions_mut());
+                match request {
+                    ClientRequest::InitializeRequest(peer_info) => {
+                        break (ClientRequest::InitializeRequest(peer_info.clone()), id, m, ext, peer_info);
+                    }
+                    _ => {
+                        let err = ErrorData::invalid_request("expected initialize request before other requests", None);
+                        if let Err(error) = transport.send(ServerJsonRpcMessage::error(err, id.clone())).await {
+                            return Err(ServerInitializeError::transport::<T>(error, "sending error response for non-initialize request"));
+                        }
+                        tracing::warn!(%id, "ignored non-initialize request during initialization");
+                        continue;
+                    }
+                }
+            }
+            ClientJsonRpcMessage::Notification(n) => {
+                tracing::warn!(?n, "ignored notification while waiting for initialize request");
+                continue;
+            }
+            other => {
+                tracing::warn!(?other, "ignored non-request message while waiting for initialize request");
+                continue;
+            }
+        }
     };
     let (peer, peer_rx) = Peer::new(id_provider, Some(peer_info.params.clone()));
     let context = RequestContext {
         ct: ct.child_token(),
         id: id.clone(),
-        meta: request.get_meta().clone(),
-        extensions: request.extensions().clone(),
+        meta,
+        extensions,
         peer: peer.clone(),
     };
     // Send initialize response
