@@ -98,7 +98,8 @@ variant_extension! {
         PromptListChangedNotification
     }
 }
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(transparent)]
 pub struct Meta(pub JsonObject);
 const PROGRESS_TOKEN_FIELD: &str = "progressToken";
@@ -115,9 +116,19 @@ impl Meta {
     pub fn get_progress_token(&self) -> Option<ProgressToken> {
         self.0.get(PROGRESS_TOKEN_FIELD).and_then(|v| match v {
             Value::String(s) => Some(ProgressToken(NumberOrString::String(s.to_string().into()))),
-            Value::Number(n) => n
-                .as_u64()
-                .map(|n| ProgressToken(NumberOrString::Number(n as u32))),
+            Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Some(ProgressToken(NumberOrString::Number(i)))
+                } else if let Some(u) = n.as_u64() {
+                    if u <= i64::MAX as u64 {
+                        Some(ProgressToken(NumberOrString::Number(u as i64)))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
             _ => None,
         })
     }
@@ -170,24 +181,6 @@ where
                     .notification
                     .extensions_mut()
                     .insert(value);
-            }
-            JsonRpcMessage::BatchRequest(json_rpc_batch_request_items) => {
-                for item in json_rpc_batch_request_items {
-                    match item {
-                        super::JsonRpcBatchRequestItem::Request(json_rpc_request) => {
-                            json_rpc_request
-                                .request
-                                .extensions_mut()
-                                .insert(value.clone());
-                        }
-                        super::JsonRpcBatchRequestItem::Notification(json_rpc_notification) => {
-                            json_rpc_notification
-                                .notification
-                                .extensions_mut()
-                                .insert(value.clone());
-                        }
-                    }
-                }
             }
             _ => {}
         }

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.6.3...rmcp-macros-v0.6.4) - 2025-09-11
+
+### Added
+
+- *(SEP-973)* add support for icons and websiteUrl across relevant types ([#432](https://github.com/modelcontextprotocol/rust-sdk/pull/432))
+- add `title` field for data types ([#410](https://github.com/modelcontextprotocol/rust-sdk/pull/410))
+
+### Fixed
+
+- generate simple {} schema for tools with no parameters ([#425](https://github.com/modelcontextprotocol/rust-sdk/pull/425))
+
+### Other
+
+- add nvim-mcp project built by rmcp ([#422](https://github.com/modelcontextprotocol/rust-sdk/pull/422))
+
+## [0.6.2](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.6.1...rmcp-macros-v0.6.2) - 2025-09-04
+
+### Fixed
+
+- *(typo)* correct typo in error message for transport cancellation and field. ([#404](https://github.com/modelcontextprotocol/rust-sdk/pull/404))
+
+### Other
+
+- add the rmcp-openapi and rmcp-actix-web related projects ([#406](https://github.com/modelcontextprotocol/rust-sdk/pull/406))
+
+## [0.6.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.6.0...rmcp-macros-v0.6.1) - 2025-08-29
+
+### Added
+
+- Add prompt support ([#351](https://github.com/modelcontextprotocol/rust-sdk/pull/351))
+
+### Fixed
+
+- *(macros)* Allow macros to work even if Future is not in scope ([#385](https://github.com/modelcontextprotocol/rust-sdk/pull/385))
+
 ## [0.6.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-macros-v0.5.0...rmcp-macros-v0.6.0) - 2025-08-19
 
 ### Other

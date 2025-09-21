@@ -42,9 +42,11 @@ where
     }
 }
 
+pub type TransportWriter<Role, W> = FramedWrite<W, JsonRpcMessageCodec<TxJsonRpcMessage<Role>>>;
+
 pub struct AsyncRwTransport<Role: ServiceRole, R: AsyncRead, W: AsyncWrite> {
     read: FramedRead<R, JsonRpcMessageCodec<RxJsonRpcMessage<Role>>>,
-    write: Arc<Mutex<FramedWrite<W, JsonRpcMessageCodec<TxJsonRpcMessage<Role>>>>>,
+    write: Arc<Mutex<Option<TransportWriter<Role, W>>>>,
 }
 
 impl<Role: ServiceRole, R, W> AsyncRwTransport<Role, R, W>
@@ -57,10 +59,10 @@ where
             read,
             JsonRpcMessageCodec::<RxJsonRpcMessage<Role>>::default(),
         );
-        let write = Arc::new(Mutex::new(FramedWrite::new(
+        let write = Arc::new(Mutex::new(Some(FramedWrite::new(
             write,
             JsonRpcMessageCodec::<TxJsonRpcMessage<Role>>::default(),
-        )));
+        ))));
         Self { read, write }
     }
 }
@@ -103,7 +105,14 @@ where
         let lock = self.write.clone();
         async move {
             let mut write = lock.lock().await;
-            write.send(item).await.map_err(Into::into)
+            if let Some(ref mut write) = *write {
+                write.send(item).await.map_err(Into::into)
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotConnected,
+                    "Transport is closed",
+                ))
+            }
         }
     }
 
@@ -120,6 +129,8 @@ where
     }
 
     async fn close(&mut self) -> Result<(), Self::Error> {
+        let mut write = self.write.lock().await;
+        drop(write.take());
         Ok(())
     }
 }
@@ -168,8 +179,31 @@ fn without_carriage_return(s: &[u8]) -> &[u8] {
     }
 }
 
-/// Check if a notification method is a standard MCP notification
-/// should update this when MCP spec is updated about new notifications
+/// Check if a method is a standard MCP method (request, response, or notification).
+/// This includes both requests and notifications defined in the MCP specification.
+///
+/// Based on MCP specification 2025-06-18: https://modelcontextprotocol.io/specification/2025-06-18
+fn is_standard_method(method: &str) -> bool {
+    matches!(
+        method,
+        "initialize"
+            | "ping"
+            | "prompts/get"
+            | "prompts/list"
+            | "resources/list"
+            | "resources/read"
+            | "resources/subscribe"
+            | "resources/unsubscribe"
+            | "resources/templates/list"
+            | "tools/call"
+            | "tools/list"
+            | "completion/complete"
+            | "logging/setLevel"
+            | "roots/list"
+            | "sampling/createMessage"
+    ) || is_standard_notification(method)
+}
+
 fn is_standard_notification(method: &str) -> bool {
     matches!(
         method,
@@ -185,6 +219,29 @@ fn is_standard_notification(method: &str) -> bool {
     )
 }
 
+/// Determines if a notification should be ignored for compatibility.
+fn should_ignore_notification(json_value: &serde_json::Value, method: &str) -> bool {
+    let is_notification = json_value.get("id").is_none();
+
+    // Ignore non-MCP notifications (like LSP messages) for compatibility
+    if is_notification && !is_standard_method(method) {
+        tracing::trace!(
+            "Ignoring non-MCP notification '{}' for compatibility",
+            method
+        );
+        return true;
+    }
+
+    // Ignore non-standard MCP notifications
+    matches!(
+        (
+            method.starts_with("notifications/"),
+            is_standard_notification(method)
+        ),
+        (true, false)
+    )
+}
+
 /// Try to parse a message with compatibility handling for non-standard notifications
 fn try_parse_with_compatibility<T: serde::de::DeserializeOwned>(
     line: &[u8],
@@ -194,22 +251,13 @@ fn try_parse_with_compatibility<T: serde::de::DeserializeOwned>(
         match serde_json::from_slice(line) {
             Ok(item) => Ok(Some(item)),
             Err(e) => {
-                // Check if this is a non-standard notification that should be ignored
-                if line_str.contains("\"method\":\"notifications/") {
-                    // Extract the method name to check if it's standard
-                    if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(line_str) {
-                        if let Some(method) = json_value.get("method").and_then(|m| m.as_str()) {
-                            if method.starts_with("notifications/")
-                                && !is_standard_notification(method)
-                            {
-                                tracing::debug!(
-                                    "Ignoring non-standard notification {} {}: {}",
-                                    method,
-                                    context,
-                                    line_str
-                                );
-                                return Ok(None); // Skip this message
-                            }
+                // Check if this is a notification that should be ignored for compatibility
+                if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(line_str) {
+                    if let Some(method) =
+                        json_value.get("method").and_then(serde_json::Value::as_str)
+                    {
+                        if should_ignore_notification(&json_value, method) {
+                            return Ok(None);
                         }
                     }
                 }

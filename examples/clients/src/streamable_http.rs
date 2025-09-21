@@ -22,7 +22,10 @@ async fn main() -> Result<()> {
         capabilities: ClientCapabilities::default(),
         client_info: Implementation {
             name: "test sse client".to_string(),
+            title: None,
             version: "0.0.1".to_string(),
+            website_url: None,
+            icons: None,
         },
     };
     let client = client_info.serve(transport).await.inspect_err(|e| {

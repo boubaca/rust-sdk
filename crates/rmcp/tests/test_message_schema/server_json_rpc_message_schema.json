@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "JsonRpcMessage",
-  "description": "Represents any JSON-RPC message that can be sent or received.\n\nThis enum covers all possible message types in the JSON-RPC protocol:\nindividual requests/responses, notifications, batch operations, and errors.\nIt serves as the top-level message container for MCP communication.",
+  "description": "Represents any JSON-RPC message that can be sent or received.\n\nThis enum covers all possible message types in the JSON-RPC protocol:\nindividual requests/responses, notifications, and errors.\nIt serves as the top-level message container for MCP communication.",
   "anyOf": [
     {
       "description": "A single request expecting a response",
@@ -26,20 +26,6 @@
           "$ref": "#/definitions/JsonRpcNotification"
         }
       ]
-    },
-    {
-      "description": "Multiple requests sent together",
-      "type": "array",
-      "items": {
-        "$ref": "#/definitions/JsonRpcBatchRequestItem"
-      }
-    },
-    {
-      "description": "Multiple responses sent together",
-      "type": "array",
-      "items": {
-        "$ref": "#/definitions/JsonRpcBatchResponseItem"
-      }
     },
     {
       "description": "An error response",
@@ -127,7 +113,24 @@
           },
           "allOf": [
             {
-              "$ref": "#/definitions/Annotated2"
+              "$ref": "#/definitions/RawAudioContent"
+            }
+          ],
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "resource_link"
+            }
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RawResource"
             }
           ],
           "required": [
@@ -139,31 +142,14 @@
     "Annotated2": {
       "type": "object",
       "properties": {
-        "annotations": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Annotations"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
         },
-        "data": {
-          "type": "string"
-        },
-        "mimeType": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "data",
-        "mimeType"
-      ]
-    },
-    "Annotated3": {
-      "type": "object",
-      "properties": {
         "annotations": {
           "anyOf": [
             {
@@ -182,7 +168,7 @@
         "resource"
       ]
     },
-    "Annotated4": {
+    "Annotated3": {
       "description": "Represents a resource in the extension with metadata",
       "type": "object",
       "properties": {
@@ -202,6 +188,16 @@
             "string",
             "null"
           ]
+        },
+        "icons": {
+          "description": "Optional list of icons for the resource",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Icon"
+          }
         },
         "mimeType": {
           "description": "MIME type of the resource content (\"text\" or \"blob\")",
@@ -223,6 +219,13 @@
           "format": "uint32",
           "minimum": 0
         },
+        "title": {
+          "description": "Human-readable title of the resource",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "uri": {
           "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
           "type": "string"
@@ -233,7 +236,7 @@
         "name"
       ]
     },
-    "Annotated5": {
+    "Annotated4": {
       "type": "object",
       "properties": {
         "annotations": {
@@ -260,6 +263,12 @@
         },
         "name": {
           "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "uriTemplate": {
           "type": "string"
@@ -282,19 +291,19 @@
             "$ref": "#/definitions/Role"
           }
         },
+        "lastModified": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
         "priority": {
           "type": [
             "number",
             "null"
           ],
           "format": "float"
-        },
-        "timestamp": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "format": "date-time"
         }
       }
     },
@@ -302,6 +311,14 @@
       "description": "The result of a tool call operation.\n\nContains the content returned by the tool execution and an optional\nflag indicating whether the operation resulted in an error.",
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this result",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "content": {
           "description": "The content returned by the tool (text, images, etc.)",
           "type": "array",
@@ -601,14 +618,62 @@
         "messages"
       ]
     },
+    "Icon": {
+      "description": "A URL pointing to an icon resource or a base64-encoded data URI.\n\nClients that support rendering icons MUST support at least the following MIME types:\n- image/png - PNG images (safe, universal compatibility)\n- image/jpeg (and image/jpg) - JPEG images (safe, universal compatibility)\n\nClients that support rendering icons SHOULD also support:\n- image/svg+xml - SVG images (scalable but requires security precautions)\n- image/webp - WebP images (modern, efficient format)",
+      "type": "object",
+      "properties": {
+        "mimeType": {
+          "description": "Optional override if the server's MIME type is missing or generic",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sizes": {
+          "description": "Size specification (e.g., \"48x48\", \"any\" for SVG, or \"48x48 96x96\")",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "src": {
+          "description": "A standard URI pointing to an icon resource",
+          "type": "string"
+        }
+      },
+      "required": [
+        "src"
+      ]
+    },
     "Implementation": {
       "type": "object",
       "properties": {
+        "icons": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Icon"
+          }
+        },
         "name": {
           "type": "string"
         },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "version": {
           "type": "string"
+        },
+        "websiteUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -656,26 +721,6 @@
         "protocolVersion",
         "capabilities",
         "serverInfo"
-      ]
-    },
-    "JsonRpcBatchRequestItem": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/JsonRpcRequest"
-        },
-        {
-          "$ref": "#/definitions/JsonRpcNotification"
-        }
-      ]
-    },
-    "JsonRpcBatchResponseItem": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/JsonRpcResponse"
-        },
-        {
-          "$ref": "#/definitions/JsonRpcError"
-        }
       ]
     },
     "JsonRpcError": {
@@ -816,7 +861,7 @@
         "resourceTemplates": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/Annotated5"
+            "$ref": "#/definitions/Annotated4"
           }
         }
       },
@@ -836,7 +881,7 @@
         "resources": {
           "type": "array",
           "items": {
-            "$ref": "#/definitions/Annotated4"
+            "$ref": "#/definitions/Annotated3"
           }
         }
       },
@@ -1143,9 +1188,25 @@
             "null"
           ]
         },
+        "icons": {
+          "description": "Optional list of icons for the prompt",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Icon"
+          }
+        },
         "name": {
           "description": "The name of the prompt",
           "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -1171,6 +1232,13 @@
           "description": "Whether this argument is required",
           "type": [
             "boolean",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "A human-readable title for the argument",
+          "type": [
+            "string",
             "null"
           ]
         }
@@ -1234,6 +1302,14 @@
           "description": "Image content with base64-encoded data",
           "type": "object",
           "properties": {
+            "_meta": {
+              "description": "Optional protocol-level metadata for this content block",
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
             "annotations": {
               "anyOf": [
                 {
@@ -1267,7 +1343,7 @@
           "type": "object",
           "properties": {
             "resource": {
-              "$ref": "#/definitions/Annotated3"
+              "$ref": "#/definitions/Annotated2"
             },
             "type": {
               "type": "string",
@@ -1277,6 +1353,79 @@
           "required": [
             "type",
             "resource"
+          ]
+        },
+        {
+          "description": "A link to a resource that can be fetched separately",
+          "type": "object",
+          "properties": {
+            "annotations": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Annotations"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": {
+              "description": "Optional description of the resource",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "icons": {
+              "description": "Optional list of icons for the resource",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/Icon"
+              }
+            },
+            "mimeType": {
+              "description": "MIME type of the resource content (\"text\" or \"blob\")",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "description": "Name of the resource",
+              "type": "string"
+            },
+            "size": {
+              "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window us",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0
+            },
+            "title": {
+              "description": "Human-readable title of the resource",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "resource_link"
+            },
+            "uri": {
+              "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "uri",
+            "name"
           ]
         }
       ]
@@ -1304,9 +1453,32 @@
       "description": "Represents the MCP protocol version used for communication.\n\nThis ensures compatibility between clients and servers by specifying\nwhich version of the Model Context Protocol is being used.",
       "type": "string"
     },
+    "RawAudioContent": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "data",
+        "mimeType"
+      ]
+    },
     "RawEmbeddedResource": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "resource": {
           "$ref": "#/definitions/ResourceContents"
         }
@@ -1318,6 +1490,14 @@
     "RawImageContent": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "data": {
           "description": "The base64-encoded image",
           "type": "string"
@@ -1331,9 +1511,75 @@
         "mimeType"
       ]
     },
+    "RawResource": {
+      "description": "Represents a resource in the extension with metadata",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Optional description of the resource",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "description": "Optional list of icons for the resource",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Icon"
+          }
+        },
+        "mimeType": {
+          "description": "MIME type of the resource content (\"text\" or \"blob\")",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Name of the resource",
+          "type": "string"
+        },
+        "size": {
+          "description": "The size of the raw resource content, in bytes (i.e., before base64 encoding or any tokenization), if known.\n\nThis can be used by Hosts to display file sizes and estimate context window us",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "title": {
+          "description": "Human-readable title of the resource",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "uri": {
+          "description": "URI representing the resource location (e.g., \"file:///path/to/file\" or \"str:///content\")",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri",
+        "name"
+      ]
+    },
     "RawTextContent": {
       "type": "object",
       "properties": {
+        "_meta": {
+          "description": "Optional protocol-level metadata for this content block",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": true
+        },
         "text": {
           "type": "string"
         }
@@ -1417,6 +1663,13 @@
         {
           "type": "object",
           "properties": {
+            "_meta": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
             "mimeType": {
               "type": [
                 "string",
@@ -1438,6 +1691,13 @@
         {
           "type": "object",
           "properties": {
+            "_meta": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
             "blob": {
               "type": "string"
             },
@@ -1659,6 +1919,16 @@
             "null"
           ]
         },
+        "icons": {
+          "description": "Optional list of icons for the tool",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Icon"
+          }
+        },
         "inputSchema": {
           "description": "A JSON Schema object defining the expected parameters for the tool",
           "type": "object",
@@ -1675,6 +1945,13 @@
             "null"
           ],
           "additionalProperties": true
+        },
+        "title": {
+          "description": "A human-readable title for the tool",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

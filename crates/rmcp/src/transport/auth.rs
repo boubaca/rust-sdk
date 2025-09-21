@@ -16,6 +16,8 @@ use thiserror::Error;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error};
 
+const DEFAULT_EXCHANGE_URL: &str = "http://localhost";
+
 /// sse client with oauth2 authorization
 #[derive(Clone)]
 pub struct AuthClient<C> {
@@ -145,7 +147,7 @@ pub struct AuthorizationManager {
     metadata: Option<AuthorizationMetadata>,
     oauth_client: Option<OAuthClient>,
     credentials: RwLock<Option<OAuthTokenResponse>>,
-    pkce_verifier: RwLock<Option<PkceCodeVerifier>>,
+    state: RwLock<Option<AuthorizationState>>,
     expires_at: RwLock<Option<Instant>>,
     base_url: Url,
 }
@@ -170,6 +172,12 @@ pub struct ClientRegistrationResponse {
     pub additional_fields: HashMap<String, serde_json::Value>,
 }
 
+#[derive(Debug)]
+struct AuthorizationState {
+    pkce_verifier: PkceCodeVerifier,
+    csrf_token: CsrfToken,
+}
+
 impl AuthorizationManager {
     /// create new auth manager with base url
     pub async fn new<U: IntoUrl>(base_url: U) -> Result<Self, AuthError> {
@@ -184,7 +192,7 @@ impl AuthorizationManager {
             metadata: None,
             oauth_client: None,
             credentials: RwLock::new(None),
-            pkce_verifier: RwLock::new(None),
+            state: RwLock::new(None),
             expires_at: RwLock::new(None),
             base_url,
         };
@@ -201,7 +209,11 @@ impl AuthorizationManager {
     pub async fn discover_metadata(&self) -> Result<AuthorizationMetadata, AuthError> {
         // according to the specification, the metadata should be located at "/.well-known/oauth-authorization-server"
         let mut discovery_url = self.base_url.clone();
-        discovery_url.set_path("/.well-known/oauth-authorization-server");
+        let path = discovery_url.path();
+        let path_suffix = if path == "/" { "" } else { path };
+        discovery_url.set_path(&format!(
+            "/.well-known/oauth-authorization-server{path_suffix}"
+        ));
         debug!("discovery url: {:?}", discovery_url);
         let response = self
             .http_client
@@ -225,10 +237,17 @@ impl AuthorizationManager {
             // discard the path part, only keep scheme, host, port
             auth_base.set_path("");
 
+            // Helper function to create endpoint URL
+            let create_endpoint = |path: &str| -> String {
+                let mut url = auth_base.clone();
+                url.set_path(path);
+                url.to_string()
+            };
+
             Ok(AuthorizationMetadata {
-                authorization_endpoint: format!("{}/authorize", auth_base),
-                token_endpoint: format!("{}/token", auth_base),
-                registration_endpoint: format!("{}/register", auth_base),
+                authorization_endpoint: create_endpoint("authorize"),
+                token_endpoint: create_endpoint("token"),
+                registration_endpoint: create_endpoint("register"),
                 issuer: None,
                 jwks_uri: None,
                 scopes_supported: None,
@@ -396,11 +415,14 @@ impl AuthorizationManager {
             auth_request = auth_request.add_scope(Scope::new(scope.to_string()));
         }
 
-        let (auth_url, _csrf_token) = auth_request.url();
+        let (auth_url, csrf_token) = auth_request.url();
 
         // store pkce verifier for later use
-        *self.pkce_verifier.write().await = Some(pkce_verifier);
-        debug!("set pkce verifier: {:?}", self.pkce_verifier.read().await);
+        *self.state.write().await = Some(AuthorizationState {
+            pkce_verifier,
+            csrf_token,
+        });
+        debug!("set authorization state: {:?}", self.state.read().await);
 
         Ok(auth_url.to_string())
     }
@@ -409,6 +431,7 @@ impl AuthorizationManager {
     pub async fn exchange_code_for_token(
         &self,
         code: &str,
+        csrf_token: &str,
     ) -> Result<StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>, AuthError> {
         debug!("start exchange code for token: {:?}", code);
         let oauth_client = self
@@ -416,12 +439,17 @@ impl AuthorizationManager {
             .as_ref()
             .ok_or_else(|| AuthError::InternalError("OAuth client not configured".to_string()))?;
 
-        let pkce_verifier = self
-            .pkce_verifier
-            .write()
-            .await
-            .take()
-            .ok_or_else(|| AuthError::InternalError("PKCE verifier not found".to_string()))?;
+        let AuthorizationState {
+            pkce_verifier,
+            csrf_token: expected_csrf_token,
+        } =
+            self.state.write().await.take().ok_or_else(|| {
+                AuthError::InternalError("Authorization state not found".to_string())
+            })?;
+
+        if csrf_token != expected_csrf_token.secret() {
+            return Err(AuthError::InternalError("CSRF token mismatch".to_string()));
+        }
 
         let http_client = reqwest::ClientBuilder::new()
             .redirect(reqwest::redirect::Policy::none())
@@ -592,8 +620,11 @@ impl AuthorizationSession {
     pub async fn handle_callback(
         &self,
         code: &str,
+        csrf_token: &str,
     ) -> Result<StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>, AuthError> {
-        self.auth_manager.exchange_code_for_token(code).await
+        self.auth_manager
+            .exchange_code_for_token(code, csrf_token)
+            .await
     }
 }
 
@@ -686,7 +717,7 @@ impl OAuthState {
         if let OAuthState::Unauthorized(manager) = self {
             let mut manager = std::mem::replace(
                 manager,
-                AuthorizationManager::new("http://localhost").await?,
+                AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?,
             );
 
             // write credentials
@@ -716,7 +747,7 @@ impl OAuthState {
     ) -> Result<(), AuthError> {
         if let OAuthState::Unauthorized(mut manager) = std::mem::replace(
             self,
-            OAuthState::Unauthorized(AuthorizationManager::new("http://localhost").await?),
+            OAuthState::Unauthorized(AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?),
         ) {
             debug!("start discovery");
             let metadata = manager.discover_metadata().await?;
@@ -736,7 +767,7 @@ impl OAuthState {
     pub async fn complete_authorization(&mut self) -> Result<(), AuthError> {
         if let OAuthState::Session(session) = std::mem::replace(
             self,
-            OAuthState::Unauthorized(AuthorizationManager::new("http://localhost").await?),
+            OAuthState::Unauthorized(AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?),
         ) {
             *self = OAuthState::Authorized(session.auth_manager);
             Ok(())
@@ -748,7 +779,7 @@ impl OAuthState {
     pub async fn to_authorized_http_client(&mut self) -> Result<(), AuthError> {
         if let OAuthState::Authorized(manager) = std::mem::replace(
             self,
-            OAuthState::Authorized(AuthorizationManager::new("http://localhost").await?),
+            OAuthState::Authorized(AuthorizationManager::new(DEFAULT_EXCHANGE_URL).await?),
         ) {
             *self = OAuthState::AuthorizedHttpClient(AuthorizedHttpClient::new(
                 Arc::new(manager),
@@ -778,10 +809,10 @@ impl OAuthState {
     }
 
     /// handle authorization callback
-    pub async fn handle_callback(&mut self, code: &str) -> Result<(), AuthError> {
+    pub async fn handle_callback(&mut self, code: &str, csrf_token: &str) -> Result<(), AuthError> {
         match self {
             OAuthState::Session(session) => {
-                session.handle_callback(code).await?;
+                session.handle_callback(code, csrf_token).await?;
                 self.complete_authorization().await
             }
             OAuthState::Unauthorized(_) => {

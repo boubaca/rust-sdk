@@ -58,6 +58,9 @@ pub struct EmptyObject {}
 
 pub trait ConstString: Default {
     const VALUE: &str;
+    fn as_str(&self) -> &'static str {
+        Self::VALUE
+    }
 }
 #[macro_export]
 macro_rules! const_string {
@@ -146,6 +149,7 @@ impl ProtocolVersion {
     pub const V_2025_06_18: Self = Self(Cow::Borrowed("2025-06-18"));
     pub const V_2025_03_26: Self = Self(Cow::Borrowed("2025-03-26"));
     pub const V_2024_11_05: Self = Self(Cow::Borrowed("2024-11-05"));
+    //  Keep LATEST at 2025-03-26 until full 2025-06-18 compliance and automated testing are in place.
     pub const LATEST: Self = Self::V_2025_03_26;
 }
 
@@ -182,7 +186,7 @@ impl<'de> Deserialize<'de> for ProtocolVersion {
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum NumberOrString {
     /// A numeric identifier
-    Number(u32),
+    Number(i64),
     /// A string identifier
     String(Arc<str>),
 }
@@ -224,10 +228,20 @@ impl<'de> Deserialize<'de> for NumberOrString {
     {
         let value: Value = Deserialize::deserialize(deserializer)?;
         match value {
-            Value::Number(n) => Ok(NumberOrString::Number(
-                n.as_u64()
-                    .ok_or(serde::de::Error::custom("Expect an integer"))? as u32,
-            )),
+            Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Ok(NumberOrString::Number(i))
+                } else if let Some(u) = n.as_u64() {
+                    // Handle large unsigned numbers that fit in i64
+                    if u <= i64::MAX as u64 {
+                        Ok(NumberOrString::Number(u as i64))
+                    } else {
+                        Err(serde::de::Error::custom("Number too large for i64"))
+                    }
+                } else {
+                    Err(serde::de::Error::custom("Expected an integer"))
+                }
+            }
             Value::String(s) => Ok(NumberOrString::String(s.into())),
             _ => Err(serde::de::Error::custom("Expect number or string")),
         }
@@ -487,44 +501,10 @@ impl ErrorData {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(untagged)]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub enum JsonRpcBatchRequestItem<Req, Not> {
-    Request(JsonRpcRequest<Req>),
-    Notification(JsonRpcNotification<Not>),
-}
-
-impl<Req, Not> JsonRpcBatchRequestItem<Req, Not> {
-    pub fn into_non_batch_message<Resp>(self) -> JsonRpcMessage<Req, Resp, Not> {
-        match self {
-            JsonRpcBatchRequestItem::Request(r) => JsonRpcMessage::Request(r),
-            JsonRpcBatchRequestItem::Notification(n) => JsonRpcMessage::Notification(n),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(untagged)]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-pub enum JsonRpcBatchResponseItem<Resp> {
-    Response(JsonRpcResponse<Resp>),
-    Error(JsonRpcError),
-}
-
-impl<Resp> JsonRpcBatchResponseItem<Resp> {
-    pub fn into_non_batch_message<Req, Not>(self) -> JsonRpcMessage<Req, Resp, Not> {
-        match self {
-            JsonRpcBatchResponseItem::Response(r) => JsonRpcMessage::Response(r),
-            JsonRpcBatchResponseItem::Error(e) => JsonRpcMessage::Error(e),
-        }
-    }
-}
-
 /// Represents any JSON-RPC message that can be sent or received.
 ///
 /// This enum covers all possible message types in the JSON-RPC protocol:
-/// individual requests/responses, notifications, batch operations, and errors.
+/// individual requests/responses, notifications, and errors.
 /// It serves as the top-level message container for MCP communication.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
@@ -536,10 +516,6 @@ pub enum JsonRpcMessage<Req = Request, Resp = DefaultResponse, Noti = Notificati
     Response(JsonRpcResponse<Resp>),
     /// A one-way notification (no response expected)
     Notification(JsonRpcNotification<Noti>),
-    /// Multiple requests sent together
-    BatchRequest(Vec<JsonRpcBatchRequestItem<Req, Noti>>),
-    /// Multiple responses sent together
-    BatchResponse(Vec<JsonRpcBatchResponseItem<Resp>>),
     /// An error response
     Error(JsonRpcError),
 }
@@ -717,11 +693,41 @@ impl Default for ClientInfo {
     }
 }
 
+/// A URL pointing to an icon resource or a base64-encoded data URI.
+///
+/// Clients that support rendering icons MUST support at least the following MIME types:
+/// - image/png - PNG images (safe, universal compatibility)
+/// - image/jpeg (and image/jpg) - JPEG images (safe, universal compatibility)
+///
+/// Clients that support rendering icons SHOULD also support:
+/// - image/svg+xml - SVG images (scalable but requires security precautions)
+/// - image/webp - WebP images (modern, efficient format)
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct Icon {
+    /// A standard URI pointing to an icon resource
+    pub src: String,
+    /// Optional override if the server's MIME type is missing or generic
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Size specification (e.g., "48x48", "any" for SVG, or "48x48 96x96")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sizes: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Implementation {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     pub version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icons: Option<Vec<Icon>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub website_url: Option<String>,
 }
 
 impl Default for Implementation {
@@ -734,7 +740,10 @@ impl Implementation {
     pub fn from_build_env() -> Self {
         Implementation {
             name: env!("CARGO_CRATE_NAME").to_owned(),
+            title: None,
             version: env!("CARGO_PKG_VERSION").to_owned(),
+            icons: None,
+            website_url: None,
         }
     }
 }
@@ -1091,17 +1100,66 @@ pub struct ModelHint {
 // COMPLETION AND AUTOCOMPLETE
 // =============================================================================
 
+/// Context for completion requests providing previously resolved arguments.
+///
+/// This enables context-aware completion where subsequent argument completions
+/// can take into account the values of previously resolved arguments.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CompletionContext {
+    /// Previously resolved argument values that can inform completion suggestions
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<std::collections::HashMap<String, String>>,
+}
+
+impl CompletionContext {
+    /// Create a new empty completion context
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a completion context with the given arguments
+    pub fn with_arguments(arguments: std::collections::HashMap<String, String>) -> Self {
+        Self {
+            arguments: Some(arguments),
+        }
+    }
+
+    /// Get a specific argument value by name
+    pub fn get_argument(&self, name: &str) -> Option<&String> {
+        self.arguments.as_ref()?.get(name)
+    }
+
+    /// Check if the context has any arguments
+    pub fn has_arguments(&self) -> bool {
+        self.arguments.as_ref().is_some_and(|args| !args.is_empty())
+    }
+
+    /// Get all argument names
+    pub fn argument_names(&self) -> impl Iterator<Item = &str> {
+        self.arguments
+            .as_ref()
+            .into_iter()
+            .flat_map(|args| args.keys())
+            .map(|k| k.as_str())
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CompleteRequestParam {
     pub r#ref: Reference,
     pub argument: ArgumentInfo,
+    /// Optional context containing previously resolved argument values
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<CompletionContext>,
 }
 
 pub type CompleteRequest = Request<CompleteRequestMethod, CompleteRequestParam>;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CompletionInfo {
@@ -1112,7 +1170,74 @@ pub struct CompletionInfo {
     pub has_more: Option<bool>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+impl CompletionInfo {
+    /// Maximum number of completion values allowed per response according to MCP specification
+    pub const MAX_VALUES: usize = 100;
+
+    /// Create a new CompletionInfo with validation for maximum values
+    pub fn new(values: Vec<String>) -> Result<Self, String> {
+        if values.len() > Self::MAX_VALUES {
+            return Err(format!(
+                "Too many completion values: {} (max: {})",
+                values.len(),
+                Self::MAX_VALUES
+            ));
+        }
+        Ok(Self {
+            values,
+            total: None,
+            has_more: None,
+        })
+    }
+
+    /// Create CompletionInfo with all values and no pagination
+    pub fn with_all_values(values: Vec<String>) -> Result<Self, String> {
+        let completion = Self::new(values)?;
+        Ok(Self {
+            total: Some(completion.values.len() as u32),
+            has_more: Some(false),
+            ..completion
+        })
+    }
+
+    /// Create CompletionInfo with pagination information
+    pub fn with_pagination(
+        values: Vec<String>,
+        total: Option<u32>,
+        has_more: bool,
+    ) -> Result<Self, String> {
+        let completion = Self::new(values)?;
+        Ok(Self {
+            total,
+            has_more: Some(has_more),
+            ..completion
+        })
+    }
+
+    /// Check if this completion response indicates more results are available
+    pub fn has_more_results(&self) -> bool {
+        self.has_more.unwrap_or(false)
+    }
+
+    /// Get the total number of available completions, if known
+    pub fn total_available(&self) -> Option<u32> {
+        self.total
+    }
+
+    /// Validate that the completion info complies with MCP specification
+    pub fn validate(&self) -> Result<(), String> {
+        if self.values.len() > Self::MAX_VALUES {
+            return Err(format!(
+                "Too many completion values: {} (max: {})",
+                self.values.len(),
+                Self::MAX_VALUES
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct CompleteResult {
@@ -1129,6 +1254,48 @@ pub enum Reference {
     Prompt(PromptReference),
 }
 
+impl Reference {
+    /// Create a prompt reference
+    pub fn for_prompt(name: impl Into<String>) -> Self {
+        // Not accepting `title` currently as it'll break the API
+        // Until further decision, keep it `None`, modify later
+        // if required, add `title` to the API
+        Self::Prompt(PromptReference {
+            name: name.into(),
+            title: None,
+        })
+    }
+
+    /// Create a resource reference
+    pub fn for_resource(uri: impl Into<String>) -> Self {
+        Self::Resource(ResourceReference { uri: uri.into() })
+    }
+
+    /// Get the reference type as a string
+    pub fn reference_type(&self) -> &'static str {
+        match self {
+            Self::Prompt(_) => "ref/prompt",
+            Self::Resource(_) => "ref/resource",
+        }
+    }
+
+    /// Extract prompt name if this is a prompt reference
+    pub fn as_prompt_name(&self) -> Option<&str> {
+        match self {
+            Self::Prompt(prompt_ref) => Some(&prompt_ref.name),
+            _ => None,
+        }
+    }
+
+    /// Extract resource URI if this is a resource reference
+    pub fn as_resource_uri(&self) -> Option<&str> {
+        match self {
+            Self::Resource(resource_ref) => Some(&resource_ref.uri),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ResourceReference {
@@ -1139,6 +1306,8 @@ pub struct ResourceReference {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PromptReference {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 const_string!(CompleteRequestMethod = "completion/complete");
@@ -1264,6 +1433,9 @@ pub struct CallToolResult {
     /// Whether this result represents an error condition
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
+    /// Optional protocol-level metadata for this result
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Meta>,
 }
 
 impl CallToolResult {
@@ -1273,6 +1445,7 @@ impl CallToolResult {
             content,
             structured_content: None,
             is_error: Some(false),
+            meta: None,
         }
     }
     /// Create an error tool result with unstructured content
@@ -1281,6 +1454,7 @@ impl CallToolResult {
             content,
             structured_content: None,
             is_error: Some(true),
+            meta: None,
         }
     }
     /// Create a successful tool result with structured content
@@ -1302,6 +1476,7 @@ impl CallToolResult {
             content: vec![Content::text(value.to_string())],
             structured_content: Some(value),
             is_error: Some(false),
+            meta: None,
         }
     }
     /// Create an error tool result with structured content
@@ -1327,6 +1502,7 @@ impl CallToolResult {
             content: vec![Content::text(value.to_string())],
             structured_content: Some(value),
             is_error: Some(true),
+            meta: None,
         }
     }
 
@@ -1374,6 +1550,9 @@ impl<'de> Deserialize<'de> for CallToolResult {
             structured_content: Option<Value>,
             #[serde(skip_serializing_if = "Option::is_none")]
             is_error: Option<bool>,
+            /// Accept `_meta` during deserialization
+            #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+            meta: Option<Meta>,
         }
 
         let helper = CallToolResultHelper::deserialize(deserializer)?;
@@ -1381,6 +1560,7 @@ impl<'de> Deserialize<'de> for CallToolResult {
             content: helper.content.unwrap_or_default(),
             structured_content: helper.structured_content,
             is_error: helper.is_error,
+            meta: helper.meta,
         };
 
         // Validate mutual exclusivity
@@ -1462,16 +1642,50 @@ pub struct GetPromptResult {
 
 macro_rules! ts_union {
     (
-        export type $U: ident =
-            $(|)?$($V: ident)|*;
+        export type $U:ident =
+            $($rest:tt)*
     ) => {
+        ts_union!(@declare $U { $($rest)* });
+        ts_union!(@impl_from $U { $($rest)* });
+    };
+    (@declare $U:ident { $($variant:tt)* }) => {
+        ts_union!(@declare_variant $U { } {$($variant)*} );
+    };
+    (@declare_variant $U:ident { $($declared:tt)* } {$(|)? box $V:ident $($rest:tt)*}) => {
+        ts_union!(@declare_variant $U { $($declared)* $V(Box<$V>), }  {$($rest)*});
+    };
+    (@declare_variant $U:ident { $($declared:tt)* } {$(|)? $V:ident $($rest:tt)*}) => {
+        ts_union!(@declare_variant $U { $($declared)* $V($V), } {$($rest)*});
+    };
+    (@declare_variant $U:ident { $($declared:tt)* }  { ; }) => {
+        ts_union!(@declare_end $U { $($declared)* } );
+    };
+    (@declare_end $U:ident { $($declared:tt)* }) => {
         #[derive(Debug, Serialize, Deserialize, Clone)]
         #[serde(untagged)]
         #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
         pub enum $U {
-            $($V($V),)*
+            $($declared)*
         }
     };
+    (@impl_from $U: ident {$(|)? box $V:ident $($rest:tt)*}) => {
+        impl From<$V> for $U {
+            fn from(value: $V) -> Self {
+                $U::$V(Box::new(value))
+            }
+        }
+        ts_union!(@impl_from $U {$($rest)*});
+    };
+    (@impl_from $U: ident {$(|)? $V:ident $($rest:tt)*}) => {
+        impl From<$V> for $U {
+            fn from(value: $V) -> Self {
+                $U::$V(value)
+            }
+        }
+        ts_union!(@impl_from $U {$($rest)*});
+    };
+    (@impl_from $U: ident  { ; }) => {};
+    (@impl_from $U: ident  { }) => {};
 }
 
 ts_union!(
@@ -1491,6 +1705,26 @@ ts_union!(
     | ListToolsRequest;
 );
 
+impl ClientRequest {
+    pub fn method(&self) -> &'static str {
+        match &self {
+            ClientRequest::PingRequest(r) => r.method.as_str(),
+            ClientRequest::InitializeRequest(r) => r.method.as_str(),
+            ClientRequest::CompleteRequest(r) => r.method.as_str(),
+            ClientRequest::SetLevelRequest(r) => r.method.as_str(),
+            ClientRequest::GetPromptRequest(r) => r.method.as_str(),
+            ClientRequest::ListPromptsRequest(r) => r.method.as_str(),
+            ClientRequest::ListResourcesRequest(r) => r.method.as_str(),
+            ClientRequest::ListResourceTemplatesRequest(r) => r.method.as_str(),
+            ClientRequest::ReadResourceRequest(r) => r.method.as_str(),
+            ClientRequest::SubscribeRequest(r) => r.method.as_str(),
+            ClientRequest::UnsubscribeRequest(r) => r.method.as_str(),
+            ClientRequest::CallToolRequest(r) => r.method.as_str(),
+            ClientRequest::ListToolsRequest(r) => r.method.as_str(),
+        }
+    }
+}
+
 ts_union!(
     export type ClientNotification =
     | CancelledNotification
@@ -1500,7 +1734,7 @@ ts_union!(
 );
 
 ts_union!(
-    export type ClientResult = CreateMessageResult | ListRootsResult | CreateElicitationResult | EmptyResult;
+    export type ClientResult = box CreateMessageResult | ListRootsResult | CreateElicitationResult | EmptyResult;
 );
 
 impl ClientResult {
@@ -1573,17 +1807,6 @@ impl TryInto<CancelledNotification> for ClientNotification {
         } else {
             Err(self)
         }
-    }
-}
-impl From<CancelledNotification> for ServerNotification {
-    fn from(value: CancelledNotification) -> Self {
-        ServerNotification::CancelledNotification(value)
-    }
-}
-
-impl From<CancelledNotification> for ClientNotification {
-    fn from(value: CancelledNotification) -> Self {
-        ClientNotification::CancelledNotification(value)
     }
 }
 
@@ -1733,6 +1956,7 @@ mod tests {
                 assert_eq!(capabilities.tools.unwrap().list_changed, Some(true));
                 assert_eq!(server_info.name, "ExampleServer");
                 assert_eq!(server_info.version, "1.0.0");
+                assert_eq!(server_info.icons, None);
                 assert_eq!(instructions, None);
             }
             other => panic!("Expected InitializeResult, got {other:?}"),
@@ -1744,9 +1968,192 @@ mod tests {
     }
 
     #[test]
+    fn test_negative_and_large_request_ids() {
+        // Test negative ID
+        let negative_id_json = json!({
+            "jsonrpc": "2.0",
+            "id": -1,
+            "method": "test",
+            "params": {}
+        });
+
+        let message: JsonRpcMessage =
+            serde_json::from_value(negative_id_json.clone()).expect("Should parse negative ID");
+
+        match &message {
+            JsonRpcMessage::Request(r) => {
+                assert_eq!(r.id, RequestId::Number(-1));
+            }
+            _ => panic!("Expected Request"),
+        }
+
+        // Test roundtrip serialization
+        let serialized = serde_json::to_value(&message).expect("Should serialize");
+        assert_eq!(serialized, negative_id_json);
+
+        // Test large negative ID
+        let large_negative_json = json!({
+            "jsonrpc": "2.0",
+            "id": -9007199254740991i64,  // JavaScript's MIN_SAFE_INTEGER
+            "method": "test",
+            "params": {}
+        });
+
+        let message: JsonRpcMessage = serde_json::from_value(large_negative_json.clone())
+            .expect("Should parse large negative ID");
+
+        match &message {
+            JsonRpcMessage::Request(r) => {
+                assert_eq!(r.id, RequestId::Number(-9007199254740991i64));
+            }
+            _ => panic!("Expected Request"),
+        }
+
+        // Test large positive ID (JavaScript's MAX_SAFE_INTEGER)
+        let large_positive_json = json!({
+            "jsonrpc": "2.0",
+            "id": 9007199254740991i64,
+            "method": "test",
+            "params": {}
+        });
+
+        let message: JsonRpcMessage = serde_json::from_value(large_positive_json.clone())
+            .expect("Should parse large positive ID");
+
+        match &message {
+            JsonRpcMessage::Request(r) => {
+                assert_eq!(r.id, RequestId::Number(9007199254740991i64));
+            }
+            _ => panic!("Expected Request"),
+        }
+
+        // Test zero ID
+        let zero_id_json = json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "test",
+            "params": {}
+        });
+
+        let message: JsonRpcMessage =
+            serde_json::from_value(zero_id_json.clone()).expect("Should parse zero ID");
+
+        match &message {
+            JsonRpcMessage::Request(r) => {
+                assert_eq!(r.id, RequestId::Number(0));
+            }
+            _ => panic!("Expected Request"),
+        }
+    }
+
+    #[test]
     fn test_protocol_version_order() {
         let v1 = ProtocolVersion::V_2024_11_05;
         let v2 = ProtocolVersion::V_2025_03_26;
         assert!(v1 < v2);
+    }
+
+    #[test]
+    fn test_icon_serialization() {
+        let icon = Icon {
+            src: "https://example.com/icon.png".to_string(),
+            mime_type: Some("image/png".to_string()),
+            sizes: Some("48x48".to_string()),
+        };
+
+        let json = serde_json::to_value(&icon).unwrap();
+        assert_eq!(json["src"], "https://example.com/icon.png");
+        assert_eq!(json["mimeType"], "image/png");
+        assert_eq!(json["sizes"], "48x48");
+
+        // Test deserialization
+        let deserialized: Icon = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, icon);
+    }
+
+    #[test]
+    fn test_icon_minimal() {
+        let icon = Icon {
+            src: "data:image/svg+xml;base64,PHN2Zy8+".to_string(),
+            mime_type: None,
+            sizes: None,
+        };
+
+        let json = serde_json::to_value(&icon).unwrap();
+        assert_eq!(json["src"], "data:image/svg+xml;base64,PHN2Zy8+");
+        assert!(json.get("mimeType").is_none());
+        assert!(json.get("sizes").is_none());
+    }
+
+    #[test]
+    fn test_implementation_with_icons() {
+        let implementation = Implementation {
+            name: "test-server".to_string(),
+            title: Some("Test Server".to_string()),
+            version: "1.0.0".to_string(),
+            icons: Some(vec![
+                Icon {
+                    src: "https://example.com/icon.png".to_string(),
+                    mime_type: Some("image/png".to_string()),
+                    sizes: Some("48x48".to_string()),
+                },
+                Icon {
+                    src: "https://example.com/icon.svg".to_string(),
+                    mime_type: Some("image/svg+xml".to_string()),
+                    sizes: Some("any".to_string()),
+                },
+            ]),
+            website_url: Some("https://example.com".to_string()),
+        };
+
+        let json = serde_json::to_value(&implementation).unwrap();
+        assert_eq!(json["name"], "test-server");
+        assert_eq!(json["websiteUrl"], "https://example.com");
+        assert!(json["icons"].is_array());
+        assert_eq!(json["icons"][0]["src"], "https://example.com/icon.png");
+        assert_eq!(json["icons"][1]["mimeType"], "image/svg+xml");
+    }
+
+    #[test]
+    fn test_backward_compatibility() {
+        // Test that old JSON without icons still deserializes correctly
+        let old_json = json!({
+            "name": "legacy-server",
+            "version": "0.9.0"
+        });
+
+        let implementation: Implementation = serde_json::from_value(old_json).unwrap();
+        assert_eq!(implementation.name, "legacy-server");
+        assert_eq!(implementation.version, "0.9.0");
+        assert_eq!(implementation.icons, None);
+        assert_eq!(implementation.website_url, None);
+    }
+
+    #[test]
+    fn test_initialize_with_icons() {
+        let init_result = InitializeResult {
+            protocol_version: ProtocolVersion::default(),
+            capabilities: ServerCapabilities::default(),
+            server_info: Implementation {
+                name: "icon-server".to_string(),
+                title: None,
+                version: "2.0.0".to_string(),
+                icons: Some(vec![Icon {
+                    src: "https://example.com/server.png".to_string(),
+                    mime_type: Some("image/png".to_string()),
+                    sizes: None,
+                }]),
+                website_url: Some("https://docs.example.com".to_string()),
+            },
+            instructions: None,
+        };
+
+        let json = serde_json::to_value(&init_result).unwrap();
+        assert!(json["serverInfo"]["icons"].is_array());
+        assert_eq!(
+            json["serverInfo"]["icons"][0]["src"],
+            "https://example.com/server.png"
+        );
+        assert_eq!(json["serverInfo"]["websiteUrl"], "https://docs.example.com");
     }
 }

@@ -11,6 +11,9 @@ use super::{AnnotateAble, Annotated, resource::ResourceContents};
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RawTextContent {
     pub text: String,
+    /// Optional protocol-level metadata for this content block
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<super::Meta>,
 }
 pub type TextContent = Annotated<RawTextContent>;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -20,6 +23,9 @@ pub struct RawImageContent {
     /// The base64-encoded image
     pub data: String,
     pub mime_type: String,
+    /// Optional protocol-level metadata for this content block
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<super::Meta>,
 }
 
 pub type ImageContent = Annotated<RawImageContent>;
@@ -27,6 +33,9 @@ pub type ImageContent = Annotated<RawImageContent>;
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RawEmbeddedResource {
+    /// Optional protocol-level metadata for this content block
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<super::Meta>,
     pub resource: ResourceContents,
 }
 pub type EmbeddedResource = Annotated<RawEmbeddedResource>;
@@ -51,13 +60,14 @@ pub struct RawAudioContent {
 pub type AudioContent = Annotated<RawAudioContent>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "snake_case")]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum RawContent {
     Text(RawTextContent),
     Image(RawImageContent),
     Resource(RawEmbeddedResource),
-    Audio(AudioContent),
+    Audio(RawAudioContent),
+    ResourceLink(super::resource::RawResource),
 }
 
 pub type Content = Annotated<RawContent>;
@@ -76,26 +86,35 @@ impl RawContent {
     }
 
     pub fn text<S: Into<String>>(text: S) -> Self {
-        RawContent::Text(RawTextContent { text: text.into() })
+        RawContent::Text(RawTextContent {
+            text: text.into(),
+            meta: None,
+        })
     }
 
     pub fn image<S: Into<String>, T: Into<String>>(data: S, mime_type: T) -> Self {
         RawContent::Image(RawImageContent {
             data: data.into(),
             mime_type: mime_type.into(),
+            meta: None,
         })
     }
 
     pub fn resource(resource: ResourceContents) -> Self {
-        RawContent::Resource(RawEmbeddedResource { resource })
+        RawContent::Resource(RawEmbeddedResource {
+            meta: None,
+            resource,
+        })
     }
 
     pub fn embedded_text<S: Into<String>, T: Into<String>>(uri: S, content: T) -> Self {
         RawContent::Resource(RawEmbeddedResource {
+            meta: None,
             resource: ResourceContents::TextResourceContents {
                 uri: uri.into(),
                 mime_type: Some("text".to_string()),
                 text: content.into(),
+                meta: None,
             },
         })
     }
@@ -123,6 +142,19 @@ impl RawContent {
             _ => None,
         }
     }
+
+    /// Get the resource link if this is a ResourceLink variant
+    pub fn as_resource_link(&self) -> Option<&super::resource::RawResource> {
+        match self {
+            RawContent::ResourceLink(link) => Some(link),
+            _ => None,
+        }
+    }
+
+    /// Create a resource link content
+    pub fn resource_link(resource: super::resource::RawResource) -> Self {
+        RawContent::ResourceLink(resource)
+    }
 }
 
 impl Content {
@@ -144,6 +176,11 @@ impl Content {
 
     pub fn json<S: Serialize>(json: S) -> Result<Self, crate::ErrorData> {
         RawContent::json(json).map(|c| c.no_annotation())
+    }
+
+    /// Create a resource link content
+    pub fn resource_link(resource: super::resource::RawResource) -> Self {
+        RawContent::resource_link(resource).no_annotation()
     }
 }
 
@@ -183,6 +220,7 @@ mod tests {
         let image_content = RawImageContent {
             data: "base64data".to_string(),
             mime_type: "image/png".to_string(),
+            meta: None,
         };
 
         let json = serde_json::to_string(&image_content).unwrap();
@@ -206,5 +244,50 @@ mod tests {
         // Verify it contains mimeType (camelCase) not mime_type (snake_case)
         assert!(json.contains("mimeType"));
         assert!(!json.contains("mime_type"));
+    }
+
+    #[test]
+    fn test_resource_link_serialization() {
+        use super::super::resource::RawResource;
+
+        let resource_link = RawContent::ResourceLink(RawResource {
+            uri: "file:///test.txt".to_string(),
+            name: "test.txt".to_string(),
+            title: None,
+            description: Some("A test file".to_string()),
+            mime_type: Some("text/plain".to_string()),
+            size: Some(100),
+            icons: None,
+        });
+
+        let json = serde_json::to_string(&resource_link).unwrap();
+        println!("ResourceLink JSON: {}", json);
+
+        // Verify it contains the correct type tag
+        assert!(json.contains("\"type\":\"resource_link\""));
+        assert!(json.contains("\"uri\":\"file:///test.txt\""));
+        assert!(json.contains("\"name\":\"test.txt\""));
+    }
+
+    #[test]
+    fn test_resource_link_deserialization() {
+        let json = r#"{
+            "type": "resource_link",
+            "uri": "file:///example.txt",
+            "name": "example.txt",
+            "description": "Example file",
+            "mimeType": "text/plain"
+        }"#;
+
+        let content: RawContent = serde_json::from_str(json).unwrap();
+
+        if let RawContent::ResourceLink(resource) = content {
+            assert_eq!(resource.uri, "file:///example.txt");
+            assert_eq!(resource.name, "example.txt");
+            assert_eq!(resource.description, Some("Example file".to_string()));
+            assert_eq!(resource.mime_type, Some("text/plain".to_string()));
+        } else {
+            panic!("Expected ResourceLink variant");
+        }
     }
 }

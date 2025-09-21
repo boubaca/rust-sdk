@@ -1,7 +1,7 @@
 use darling::{FromMeta, ast::NestedMeta};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
-use syn::{Expr, Ident, ImplItemFn, ReturnType};
+use syn::{Expr, Ident, ImplItemFn, ReturnType, parse_quote};
 
 use crate::common::{extract_doc_line, none_expr};
 
@@ -66,6 +66,8 @@ fn extract_schema_from_return_type(ret_type: &syn::Type) -> Option<Expr> {
 pub struct ToolAttribute {
     /// The name of the tool
     pub name: Option<String>,
+    /// Human readable title of tool
+    pub title: Option<String>,
     pub description: Option<String>,
     /// A JSON Schema object defining the expected parameters for the tool
     pub input_schema: Option<Expr>,
@@ -73,14 +75,18 @@ pub struct ToolAttribute {
     pub output_schema: Option<Expr>,
     /// Optional additional tool information.
     pub annotations: Option<ToolAnnotationsAttribute>,
+    /// Optional icons for the tool
+    pub icons: Option<Expr>,
 }
 
 pub struct ResolvedToolAttribute {
     pub name: String,
+    pub title: Option<String>,
     pub description: Option<String>,
     pub input_schema: Expr,
     pub output_schema: Option<Expr>,
     pub annotations: Expr,
+    pub icons: Option<Expr>,
 }
 
 impl ResolvedToolAttribute {
@@ -88,9 +94,11 @@ impl ResolvedToolAttribute {
         let Self {
             name,
             description,
+            title,
             input_schema,
             output_schema,
             annotations,
+            icons,
         } = self;
         let description = if let Some(description) = description {
             quote! { Some(#description.into()) }
@@ -102,14 +110,29 @@ impl ResolvedToolAttribute {
         } else {
             quote! { None }
         };
+        let title = if let Some(title) = title {
+            quote! { Some(#title.into()) }
+        } else {
+            quote! { None }
+        };
+        let icons = if let Some(icons) = icons {
+            quote! { Some(#icons) }
+        } else {
+            quote! { None }
+        };
+        let doc_comment = format!("Generated tool metadata function for {name}");
+        let doc_attr: syn::Attribute = parse_quote!(#[doc = #doc_comment]);
         let tokens = quote! {
+            #doc_attr
             pub fn #fn_ident() -> rmcp::model::Tool {
                 rmcp::model::Tool {
                     name: #name.into(),
+                    title: #title,
                     description: #description,
                     input_schema: #input_schema,
                     output_schema: #output_schema,
                     annotations: #annotations,
+                    icons: #icons,
                 }
             }
         };
@@ -176,9 +199,9 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
                 rmcp::handler::server::common::cached_schema_for_type::<#params_ty>()
             })?
         } else {
-            // if not found, use the default EmptyObject schema
+            // if not found, use a simple empty JSON object
             syn::parse2::<Expr>(quote! {
-                rmcp::handler::server::common::cached_schema_for_type::<rmcp::model::EmptyObject>()
+                std::sync::Arc::new(serde_json::Map::new())
             })?
         }
     };
@@ -229,6 +252,8 @@ pub fn tool(attr: TokenStream, input: TokenStream) -> syn::Result<TokenStream> {
         input_schema: input_schema_expr,
         output_schema: output_schema_expr,
         annotations: annotations_expr,
+        title: attribute.title,
+        icons: attribute.icons,
     };
     let tool_attr_fn = resolved_tool_attr.into_fn(tool_attr_fn_ident)?;
     // modify the the input function

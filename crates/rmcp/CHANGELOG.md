@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.6.3...rmcp-v0.6.4) - 2025-09-11
+
+### Added
+
+- *(SEP-973)* add support for icons and websiteUrl across relevant types ([#432](https://github.com/modelcontextprotocol/rust-sdk/pull/432))
+- implement context-aware completion (MCP 2025-06-18) ([#396](https://github.com/modelcontextprotocol/rust-sdk/pull/396))
+- add `title` field for data types ([#410](https://github.com/modelcontextprotocol/rust-sdk/pull/410))
+
+### Fixed
+
+- crates/rmcp/src/handler/client/progress.rs dispacher-> dispatcher ([#429](https://github.com/modelcontextprotocol/rust-sdk/pull/429))
+- build issue due to missing struct field ([#427](https://github.com/modelcontextprotocol/rust-sdk/pull/427))
+- generate simple {} schema for tools with no parameters ([#425](https://github.com/modelcontextprotocol/rust-sdk/pull/425))
+
+### Other
+
+- Skip notification in initialization handshake ([#421](https://github.com/modelcontextprotocol/rust-sdk/pull/421))
+- add nvim-mcp project built by rmcp ([#422](https://github.com/modelcontextprotocol/rust-sdk/pull/422))
+
+## [0.6.3](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.6.2...rmcp-v0.6.3) - 2025-09-04
+
+### Fixed
+
+- change JSON-RPC request ID type from u32 to i64 ([#416](https://github.com/modelcontextprotocol/rust-sdk/pull/416))
+
+## [0.6.2](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.6.1...rmcp-v0.6.2) - 2025-09-04
+
+### Added
+
+- *(rmcp)* add optional _meta to CallToolResult, EmbeddedResource, and ResourceContents ([#386](https://github.com/modelcontextprotocol/rust-sdk/pull/386))
+
+### Fixed
+
+- resolve compatibility issues with servers sending LSP notifications ([#413](https://github.com/modelcontextprotocol/rust-sdk/pull/413))
+- remove batched json rpc  support ([#408](https://github.com/modelcontextprotocol/rust-sdk/pull/408))
+- transport-streamable-http-server depends on transport-worker ([#405](https://github.com/modelcontextprotocol/rust-sdk/pull/405))
+- *(typo)* correct typo in error message for transport cancellation and field. ([#404](https://github.com/modelcontextprotocol/rust-sdk/pull/404))
+
+### Other
+
+- Spec conformance: meta support and spec updates ([#415](https://github.com/modelcontextprotocol/rust-sdk/pull/415))
+- add the rmcp-openapi and rmcp-actix-web related projects ([#406](https://github.com/modelcontextprotocol/rust-sdk/pull/406))
+
+## [0.6.1](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.6.0...rmcp-v0.6.1) - 2025-08-29
+
+### Added
+
+- *(rmcp)* add authorization header support for the streamable http client ([#390](https://github.com/modelcontextprotocol/rust-sdk/pull/390))
+- *(model)* add helpers to build enum from concrete values ([#393](https://github.com/modelcontextprotocol/rust-sdk/pull/393))
+- *(model)* expose client method name ([#391](https://github.com/modelcontextprotocol/rust-sdk/pull/391))
+- add resource_link support to tools and prompts ([#381](https://github.com/modelcontextprotocol/rust-sdk/pull/381))
+- Add prompt support ([#351](https://github.com/modelcontextprotocol/rust-sdk/pull/351))
+- include reqwest in transport-streamble-http-client feature ([#376](https://github.com/modelcontextprotocol/rust-sdk/pull/376))
+
+### Fixed
+
+- *(auth)* url parse is not correct ([#402](https://github.com/modelcontextprotocol/rust-sdk/pull/402))
+- *(readme)* missing use declarations, more accurate server instructions ([#399](https://github.com/modelcontextprotocol/rust-sdk/pull/399))
+- enhance transport graceful shutdown with proper writer closure ([#392](https://github.com/modelcontextprotocol/rust-sdk/pull/392))
+
+### Other
+
+- simplify remove_route method signature ([#401](https://github.com/modelcontextprotocol/rust-sdk/pull/401))
+
 ## [0.6.0](https://github.com/modelcontextprotocol/rust-sdk/compare/rmcp-v0.5.0...rmcp-v0.6.0) - 2025-08-19
 
 ### Added
